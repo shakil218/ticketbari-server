@@ -31,9 +31,15 @@ async function run() {
     await client.connect();
 
     const database = client.db(process.env.DB_NAME);
-    const users = database.collection("user");
+    const userCollection = database.collection("user");
+    const ticketsCollection = database.collection("tickets");
 
-
+    // Tickets Related API
+    app.post('/api/tickets', async (req, res) => {
+      const ticket = req.body;
+      const result = await ticketsCollection.insertOne(ticket);
+      res.send(result);
+    });
 
 
 
