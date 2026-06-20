@@ -35,6 +35,18 @@ async function run() {
     const ticketsCollection = database.collection("tickets");
 
     // Tickets Related API
+    app.get('/api/tickets', async (req, res) => {
+      const query = {};
+      if(req.query.vendorEmail){
+        query.email = req.query.vendorEmail;
+      }
+      if(req.query.status){
+        query.status = req.query.status;
+      }
+      const tickets = await ticketsCollection.find(query).toArray();
+      res.send(tickets);
+    });
+
     app.post('/api/tickets', async (req, res) => {
       const ticket = req.body;
       const result = await ticketsCollection.insertOne(ticket);
