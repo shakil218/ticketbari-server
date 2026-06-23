@@ -46,8 +46,8 @@ async function run() {
       if (req.query.vendorEmail) {
         query.email = req.query.vendorEmail;
       }
-      const tickets = await ticketsCollection.find(query).toArray();
-      res.send(tickets);
+      const result = await ticketsCollection.find(query).toArray();
+      res.send(result);
     });
 
     app.get("/api/tickets/:id", async (req, res) => {
@@ -63,6 +63,18 @@ async function run() {
     });
 
     // Tickets Booking related API
+    app.get("/api/bookings", async (req, res) => {
+      const query = {};
+      if (req.query.passengerId) {
+        query.passengerId = req.query.passengerId;
+      }
+      if (req.query.ticketId) {
+        query.ticketId = req.query.ticketId;
+      }
+      const result = await bookingCollection.find(query).toArray();
+      res.send(result);
+    }); 
+    
     app.post("/api/bookings", async (req, res) => {
       const booking = req.body;
       const newBooking = {
@@ -72,6 +84,7 @@ async function run() {
       const result = await bookingCollection.insertOne(newBooking);
       res.send(result);
     });
+
     
 
 
