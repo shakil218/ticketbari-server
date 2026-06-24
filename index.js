@@ -31,8 +31,9 @@ async function run() {
 
     const database = client.db(process.env.DB_NAME);
     const userCollection = database.collection("user");
-    const ticketsCollection = database.collection("tickets");
+    const ticketCollection = database.collection("tickets");
     const bookingCollection = database.collection("bookings");
+    const paymentCollection = database.collection("payments");
 
     // User Related API
     app.get("/users", async (req, res) => {
@@ -46,19 +47,19 @@ async function run() {
       if (req.query.vendorEmail) {
         query.email = req.query.vendorEmail;
       }
-      const result = await ticketsCollection.find(query).toArray();
+      const result = await ticketCollection.find(query).toArray();
       res.send(result);
     });
 
     app.get("/api/tickets/:id", async (req, res) => {
       const id = req.params.id;
-      const result = await ticketsCollection.findOne( { _id: new ObjectId(id) });
+      const result = await ticketCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
     app.post("/api/tickets", async (req, res) => {
       const ticket = req.body;
-      const result = await ticketsCollection.insertOne(ticket);
+      const result = await ticketCollection.insertOne(ticket);
       res.send(result);
     });
 
@@ -73,14 +74,14 @@ async function run() {
       }
       const result = await bookingCollection.find(query).toArray();
       res.send(result);
-    }); 
-    
+    });
+
     app.post("/api/bookings", async (req, res) => {
       const booking = req.body;
       const newBooking = {
         ...booking,
         createdAt: new Date(),
-      }
+      };
       const result = await bookingCollection.insertOne(newBooking);
       res.send(result);
     });
@@ -92,15 +93,78 @@ async function run() {
       const updatedDoc = {
         $set: {
           status: booking.status,
-        }
-      }
+        },
+      };
       const result = await bookingCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
 
-    
+    // payment related api
+    app.post("/api/payments", async (req, res) => {
+      try {
+        const payment = req.body;
 
+        const booking = await bookingCollection.findOne({
+          _id: new ObjectId(payment.bookingId),
+        });
 
+        if (!booking) {
+          return res.status(404).send({
+            success: false,
+            message: "Booking not found",
+          });
+        }
+
+        if (booking.status === "paid") {
+          return res.send({
+            success: true,
+            message: "Already processed",
+          });
+        }
+
+        const paymentInfo = {
+          ...payment,
+          paymentStatus: "paid",
+          createdAt: new Date(),
+        };
+
+        await paymentCollection.insertOne(paymentInfo);
+
+        await bookingCollection.updateOne(
+          {
+            _id: new ObjectId(payment.bookingId),
+          },
+          {
+            $set: {
+              status: "paid",
+              paidAt: new Date(),
+              transactionId: payment.transactionId,
+            },
+          },
+        );
+
+        await ticketCollection.updateOne(
+          {
+            _id: new ObjectId(payment.ticketId),
+          },
+          {
+            $inc: {
+              quantity: -Number(payment.bookingQuantity),
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          message: "Payment processed successfully",
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
