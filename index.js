@@ -100,6 +100,15 @@ async function run() {
     });
 
     // payment related api
+    app.get("/api/payments", async (req, res) => {
+      const query = {};
+      if (req.query.customerEmail) {
+        query.email = req.query.customerEmail;
+      }
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
     app.post("/api/payments", async (req, res) => {
       try {
         const payment = req.body;
@@ -115,6 +124,7 @@ async function run() {
           });
         }
 
+        // Prevent duplicate payment processing
         if (booking.status === "paid") {
           return res.send({
             success: true,
@@ -122,6 +132,7 @@ async function run() {
           });
         }
 
+        // Save payment history
         const paymentInfo = {
           ...payment,
           paymentStatus: "paid",
@@ -130,6 +141,7 @@ async function run() {
 
         await paymentCollection.insertOne(paymentInfo);
 
+        // Update booking status
         await bookingCollection.updateOne(
           {
             _id: new ObjectId(payment.bookingId),
@@ -143,6 +155,7 @@ async function run() {
           },
         );
 
+        // Reduce ticket quantity
         await ticketCollection.updateOne(
           {
             _id: new ObjectId(payment.ticketId),
