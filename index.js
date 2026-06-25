@@ -125,7 +125,6 @@ async function run() {
             $set: updateDoc,
           },
         );
-        console.log(result);
         res.send(result);
       } catch (error) {
         console.error(error);
@@ -144,6 +143,27 @@ async function run() {
       }
       const result = await ticketCollection.find(query).toArray();
       res.send(result);
+    });
+
+    // get admin approved tickets
+    app.get("/api/tickets/approved", async (req, res) => {
+      try {
+        const result = await ticketCollection
+          .find({
+            status: "approved",
+            isHidden: { $ne: true },
+          })
+          .sort({
+            updatedAt: -1,
+          })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          message: error.message,
+        });
+      }
     });
 
     app.get("/api/tickets/:id", async (req, res) => {
@@ -175,6 +195,44 @@ async function run() {
       );
 
       res.send(result);
+    });
+
+    // update advertised status
+    app.patch("/api/tickets/advertise/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { isAdvertised } = req.body;
+
+        if (isAdvertised) {
+          const count = await ticketCollection.countDocuments({
+            isAdvertised: true,
+          });
+
+          if (count >= 6) {
+            return res.status(400).send({
+              message: "Only 6 advertisements are allowed.",
+            });
+          }
+        }
+
+        const result = await ticketCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+          },
+          {
+            $set: {
+              isAdvertised,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          message: error.message,
+        });
+      }
     });
 
     // Tickets Booking related API
