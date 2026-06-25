@@ -41,6 +41,23 @@ async function run() {
       res.send(users);
     });
 
+    app.patch("/api/users/:email", async (req, res) => {
+      const email = req.params.email;
+      const { image } = req.body;
+
+      const result = await userCollection.updateOne(
+        { email },
+        {
+          $set: {
+            image,
+            updatedAt: new Date(),
+          },
+        },
+      );
+
+      res.send(result);
+    });
+
     // Tickets Related API
     app.get("/api/tickets", async (req, res) => {
       const query = {};
@@ -103,7 +120,7 @@ async function run() {
     app.get("/api/payments", async (req, res) => {
       const query = {};
       if (req.query.customerEmail) {
-        query.email = req.query.customerEmail;
+        query.customerEmail = req.query.customerEmail;
       }
       const result = await paymentCollection.find(query).toArray();
       res.send(result);
