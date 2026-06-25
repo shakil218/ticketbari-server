@@ -10,7 +10,12 @@ app.use(express.json());
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 app.get("/", (req, res) => {
+  console.log("backend server hit");
   res.send("Hello World!");
+});
+app.get("/test-server", (req, res) => {
+  console.log("TEST SERVER HIT");
+  res.send("Backend Working");
 });
 
 const uri = process.env.MONGO_DB_URI;
@@ -36,13 +41,14 @@ async function run() {
     const bookingCollection = database.collection("bookings");
     const paymentCollection = database.collection("payments");
 
-    // User Related API
-    app.get("/users", async (req, res) => {
+    // Users Related API
+    app.get("/api/users", async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
     });
 
-    app.patch("/api/users/:email", async (req, res) => {
+    // update user image
+    app.patch("/api/users/image/:email", async (req, res) => {
       const email = req.params.email;
       const { image } = req.body;
 
@@ -57,6 +63,77 @@ async function run() {
       );
 
       res.send(result);
+    });
+
+    // update user role and fraud status
+    app.patch("/api/users/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const { role, isFraud } = req.body;
+
+        const user = await userCollection.findOne({
+          email,
+        });
+
+        if (!user) {
+          return res.status(404).send({
+            message: "User not found",
+          });
+        }
+
+        const updateDoc = {};
+
+        if (role) {
+          updateDoc.role = role;
+        }
+
+        if (typeof isFraud === "boolean") {
+          updateDoc.isFraud = isFraud;
+
+          // Hide vendor tickets when marked fraud
+          if (isFraud) {
+            await ticketCollection.updateMany(
+              {
+                vendorEmail: email,
+              },
+              {
+                $set: {
+                  isHidden: true,
+                },
+              },
+            );
+          }
+
+          // Show tickets again if fraud removed
+          if (!isFraud) {
+            await ticketCollection.updateMany(
+              {
+                vendorEmail: email,
+              },
+              {
+                $set: {
+                  isHidden: false,
+                },
+              },
+            );
+          }
+        }
+
+        const result = await userCollection.updateOne(
+          { email },
+          {
+            $set: updateDoc,
+          },
+        );
+        console.log(result);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+          message: "Failed to update user",
+        });
+      }
     });
 
     // Tickets Related API
