@@ -137,11 +137,16 @@ async function run() {
 
     // Tickets Related API
     app.get("/api/tickets", async (req, res) => {
-      const query = {};
+      const query = {
+        isHidden: { $ne: true },
+      };
+
       if (req.query.vendorEmail) {
-        query.email = req.query.vendorEmail;
+        query.vendorEmail = req.query.vendorEmail;
       }
+
       const result = await ticketCollection.find(query).toArray();
+
       res.send(result);
     });
 
@@ -226,6 +231,22 @@ async function run() {
             },
           },
         );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          message: error.message,
+        });
+      }
+    });
+
+    app.delete("/api/tickets/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const result = await ticketCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
 
         res.send(result);
       } catch (error) {
