@@ -30,6 +30,7 @@ async function run() {
     await client.connect();
 
     const database = client.db(process.env.DB_NAME);
+
     const userCollection = database.collection("user");
     const ticketCollection = database.collection("tickets");
     const bookingCollection = database.collection("bookings");
@@ -77,6 +78,25 @@ async function run() {
     app.post("/api/tickets", async (req, res) => {
       const ticket = req.body;
       const result = await ticketCollection.insertOne(ticket);
+      res.send(result);
+    });
+
+    app.patch("/api/tickets/:id", async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      const result = await ticketCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+        },
+        {
+          $set: {
+            status,
+            updatedAt: new Date(),
+          },
+        },
+      );
+
       res.send(result);
     });
 
