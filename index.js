@@ -54,6 +54,7 @@ async function run() {
 
       const query = { token: token };
       const session = await sessionCollection.findOne(query);
+
       const userId = session?.userId;
       const userQuery = { _id: userId };
       const user = await userCollection.findOne(userQuery);
@@ -61,7 +62,30 @@ async function run() {
       req.user = user;
       next();
     };
-    
+
+    // Vendor Verification Middleware
+    const verifyVendor = async (req, res, next) => {
+      if (!req.user) {
+        return res.status(401).send({
+          message: "Unauthorized Access",
+        });
+      }
+
+      if (req.user.role !== "vendor") {
+        return res.status(403).send({
+          message: "Forbidden Access",
+        });
+      }
+
+      if (req.user.isFraud) {
+        return res.status(403).send({
+          message:
+            "Your vendor account has been marked as fraud. Vendor activities are disabled.",
+        });
+      }
+
+      next();
+    };
 
     // Users Related API
     app.get("/api/users", verifyToken, async (req, res) => {
@@ -199,7 +223,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/tickets", verifyToken, async (req, res) => {
+    app.post("/api/tickets", verifyToken, verifyVendor, async (req, res) => {
       const ticket = req.body;
       const result = await ticketCollection.insertOne(ticket);
       res.send(result);
@@ -263,7 +287,7 @@ async function run() {
     });
 
     // Update Ticket with vendor
-    app.patch("/api/tickets/update/:id", verifyToken, async (req, res) => {
+    app.patch("/api/tickets/update/:id", verifyToken, verifyVendor, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -289,7 +313,7 @@ async function run() {
       }
     });
 
-    app.delete("/api/tickets/:id", verifyToken, async (req, res) => {
+    app.delete("/api/tickets/:id", verifyToken, verifyVendor, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -304,6 +328,8 @@ async function run() {
         });
       }
     });
+
+
 
     // Tickets Booking related API
     app.get("/api/bookings", verifyToken, async (req, res) => {
