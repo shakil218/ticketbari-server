@@ -10,12 +10,7 @@ app.use(express.json());
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 app.get("/", (req, res) => {
-  console.log("backend server hit");
   res.send("Hello World!");
-});
-app.get("/test-server", (req, res) => {
-  console.log("TEST SERVER HIT");
-  res.send("Backend Working");
 });
 
 const uri = process.env.MONGO_DB_URI;
@@ -37,18 +32,45 @@ async function run() {
     const database = client.db(process.env.DB_NAME);
 
     const userCollection = database.collection("user");
+    const sessionCollection = database.collection("session");
     const ticketCollection = database.collection("tickets");
     const bookingCollection = database.collection("bookings");
     const paymentCollection = database.collection("payments");
 
+    // Verification Related Custom Middleware
+    const verifyToken = async (req, res, next) => {
+      if (!req.headers.authorization) {
+        return res.status(401).send({
+          message: "Unauthorized Access",
+        });
+      }
+
+      const token = req.headers.authorization.split(" ")[1];
+      if (!token) {
+        return res.status(401).send({
+          message: "Unauthorized Access",
+        });
+      }
+
+      const query = { token: token };
+      const session = await sessionCollection.findOne(query);
+      const userId = session?.userId;
+      const userQuery = { _id: userId };
+      const user = await userCollection.findOne(userQuery);
+
+      req.user = user;
+      next();
+    };
+    
+
     // Users Related API
-    app.get("/api/users", async (req, res) => {
+    app.get("/api/users", verifyToken, async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
     });
 
     // update user image
-    app.patch("/api/users/image/:email", async (req, res) => {
+    app.patch("/api/users/image/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const { image } = req.body;
 
@@ -66,7 +88,7 @@ async function run() {
     });
 
     // update user role and fraud status
-    app.patch("/api/users/:email", async (req, res) => {
+    app.patch("/api/users/:email", verifyToken, async (req, res) => {
       try {
         const { email } = req.params;
         const { role, isFraud } = req.body;
@@ -136,7 +158,7 @@ async function run() {
     });
 
     // Tickets Related API
-    app.get("/api/tickets", async (req, res) => {
+    app.get("/api/tickets", verifyToken, async (req, res) => {
       const query = {
         isHidden: { $ne: true },
       };
@@ -177,13 +199,13 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/tickets", async (req, res) => {
+    app.post("/api/tickets", verifyToken, async (req, res) => {
       const ticket = req.body;
       const result = await ticketCollection.insertOne(ticket);
       res.send(result);
     });
 
-    app.patch("/api/tickets/:id", async (req, res) => {
+    app.patch("/api/tickets/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const { status } = req.body;
 
@@ -203,7 +225,7 @@ async function run() {
     });
 
     // update advertised status
-    app.patch("/api/tickets/advertise/:id", async (req, res) => {
+    app.patch("/api/tickets/advertise/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { isAdvertised } = req.body;
@@ -241,7 +263,7 @@ async function run() {
     });
 
     // Update Ticket with vendor
-    app.patch("/api/tickets/update/:id", async (req, res) => {
+    app.patch("/api/tickets/update/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -267,7 +289,7 @@ async function run() {
       }
     });
 
-    app.delete("/api/tickets/:id", async (req, res) => {
+    app.delete("/api/tickets/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -284,11 +306,16 @@ async function run() {
     });
 
     // Tickets Booking related API
-    app.get("/api/bookings", async (req, res) => {
+    app.get("/api/bookings", verifyToken, async (req, res) => {
       const query = {};
       if (req.query.passengerId) {
         query.passengerId = req.query.passengerId;
       }
+
+      if (req.query.vendorEmail) {
+        query.vendorEmail = req.query.vendorEmail;
+      }
+
       if (req.query.ticketId) {
         query.ticketId = req.query.ticketId;
       }
@@ -296,7 +323,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/bookings", async (req, res) => {
+    app.post("/api/bookings", verifyToken, async (req, res) => {
       const booking = req.body;
       const newBooking = {
         ...booking,
@@ -306,7 +333,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/api/bookings/:id", async (req, res) => {
+    app.patch("/api/bookings/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const booking = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -320,7 +347,7 @@ async function run() {
     });
 
     // payment related api
-    app.get("/api/payments", async (req, res) => {
+    app.get("/api/payments", verifyToken, async (req, res) => {
       const query = {};
       if (req.query.customerEmail) {
         query.customerEmail = req.query.customerEmail;
@@ -329,7 +356,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/payments", async (req, res) => {
+    app.post("/api/payments", verifyToken, async (req, res) => {
       try {
         const payment = req.body;
 
@@ -400,9 +427,7 @@ async function run() {
     });
 
     // revenue report
-    // Add this inside your async function run() block alongside your other ticket APIs:
-
-    app.get("/api/vendor-analytics/:email", async (req, res) => {
+    app.get("/api/vendor-analytics/:email", verifyToken, async (req, res) => {
       try {
         const { email } = req.params;
 
