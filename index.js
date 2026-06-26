@@ -399,6 +399,118 @@ async function run() {
       }
     });
 
+    // revenue report
+    // Add this inside your async function run() block alongside your other ticket APIs:
+
+    app.get("/api/vendor-analytics/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        // 1. Fetch all tickets owned by this vendor
+        const tickets = await ticketCollection
+          .find({ vendorEmail: email })
+          .toArray();
+
+        // 2. Fetch all bookings for this vendor's tickets that have been paid
+        // We match by checking if the booking has a status of "paid"
+        // Note: If your schema uses passengerEmail/vendorEmail mappings explicitly, adjust filter criteria
+        const bookings = await bookingCollection
+          .find({
+            status: "paid",
+          })
+          .toArray();
+
+        // Since bookings don't explicitly hold a vendorEmail field in the sample,
+        // we filter bookings matching this vendor's ticket IDs to be mathematically accurate.
+        const vendorTicketIds = tickets.map((t) => t._id.toString());
+        const vendorBookings = bookings.filter((b) =>
+          vendorTicketIds.includes(b.ticketId),
+        );
+
+        // Calculate core totals
+        const totalTicketsAdded = tickets.reduce(
+          (acc, t) => acc + (Number(t.quantity) || 0),
+          0,
+        );
+        const totalTicketsSold = vendorBookings.reduce(
+          (acc, b) => acc + (Number(b.bookingQuantity) || 0),
+          0,
+        );
+        const totalRevenue = vendorBookings.reduce(
+          (acc, b) => acc + (Number(b.totalPrice) || 0),
+          0,
+        );
+
+        /* ---------------- DYNAMIC ROLLING 6-MONTH REVENUE MAP ---------------- */
+        const monthNames = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
+        const revenueMap = {};
+
+        // Pre-populate structural keys for the last 6 months in chronological order
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date();
+          d.setMonth(d.getMonth() - i);
+          const mName = monthNames[d.getMonth()];
+          revenueMap[mName] = 0;
+        }
+
+        // Allocate booking price groups into matching month structures
+        vendorBookings.forEach((booking) => {
+          if (booking.paidAt || booking.createdAt) {
+            const targetDate = booking.paidAt
+              ? new Date(booking.paidAt)
+              : new Date(booking.createdAt);
+            const mName = monthNames[targetDate.getMonth()];
+            if (revenueMap[mName] !== undefined) {
+              revenueMap[mName] += Number(booking.totalPrice) || 0;
+            }
+          }
+        });
+
+        const revenueData = Object.entries(revenueMap).map(
+          ([month, revenue]) => ({
+            month,
+            revenue,
+          }),
+        );
+
+        const ticketPerformance = [
+          { name: "Available Pool", value: totalTicketsAdded },
+          { name: "Tickets Sold", value: totalTicketsSold },
+        ];
+
+        res.send({
+          success: true,
+          stats: {
+            ticketsAdded: totalTicketsAdded,
+            ticketsSold: totalTicketsSold,
+            revenue: totalRevenue,
+          },
+          revenueData,
+          ticketPerformance,
+        });
+      } catch (error) {
+        console.error("Analytics aggregation error:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error gathering aggregate dashboard trends.",
+        });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
