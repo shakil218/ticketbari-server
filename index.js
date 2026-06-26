@@ -38,6 +38,7 @@ async function run() {
     const paymentCollection = database.collection("payments");
 
     // Verification Related Custom Middleware
+    // Token Verification Middleware
     const verifyToken = async (req, res, next) => {
       if (!req.headers.authorization) {
         return res.status(401).send({
@@ -60,6 +61,26 @@ async function run() {
       const user = await userCollection.findOne(userQuery);
 
       req.user = user;
+      next();
+    };
+
+    // User Verification Middleware
+    const verifyUser = async (req, res, next) => {
+      if (!req.user) {
+        return res.status(401).send({
+          message: "Unauthorized Access",
+        });
+      }
+
+      // If role is missing, consider it a normal user
+      const role = req.user.role || "user";
+
+      if (role !== "user") {
+        return res.status(403).send({
+          message: "Forbidden Access",
+        });
+      }
+
       next();
     };
 
@@ -87,8 +108,25 @@ async function run() {
       next();
     };
 
+    // Admin Verification Middleware
+    const verifyAdmin = async (req, res, next) => {
+      if (!req.user) {
+        return res.status(401).send({
+          message: "Unauthorized Access",
+        });
+      }
+
+      if (req.user.role !== "admin") {
+        return res.status(403).send({
+          message: "Forbidden Access",
+        });
+      }
+
+      next();
+    };
+
     // Users Related API
-    app.get("/api/users", verifyToken, async (req, res) => {
+    app.get("/api/users", verifyToken, verifyAdmin, async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
     });
@@ -112,74 +150,79 @@ async function run() {
     });
 
     // update user role and fraud status
-    app.patch("/api/users/:email", verifyToken, async (req, res) => {
-      try {
-        const { email } = req.params;
-        const { role, isFraud } = req.body;
+    app.patch(
+      "/api/users/:email",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
+          const { role, isFraud } = req.body;
 
-        const user = await userCollection.findOne({
-          email,
-        });
+          const user = await userCollection.findOne({
+            email,
+          });
 
-        if (!user) {
-          return res.status(404).send({
-            message: "User not found",
+          if (!user) {
+            return res.status(404).send({
+              message: "User not found",
+            });
+          }
+
+          const updateDoc = {};
+
+          if (role) {
+            updateDoc.role = role;
+          }
+
+          if (typeof isFraud === "boolean") {
+            updateDoc.isFraud = isFraud;
+
+            // Hide vendor tickets when marked fraud
+            if (isFraud) {
+              await ticketCollection.updateMany(
+                {
+                  vendorEmail: email,
+                },
+                {
+                  $set: {
+                    isHidden: true,
+                  },
+                },
+              );
+            }
+
+            // Show tickets again if fraud removed
+            if (!isFraud) {
+              await ticketCollection.updateMany(
+                {
+                  vendorEmail: email,
+                },
+                {
+                  $set: {
+                    isHidden: false,
+                  },
+                },
+              );
+            }
+          }
+
+          const result = await userCollection.updateOne(
+            { email },
+            {
+              $set: updateDoc,
+            },
+          );
+          res.send(result);
+        } catch (error) {
+          console.error(error);
+
+          res.status(500).send({
+            message: "Failed to update user",
           });
         }
-
-        const updateDoc = {};
-
-        if (role) {
-          updateDoc.role = role;
-        }
-
-        if (typeof isFraud === "boolean") {
-          updateDoc.isFraud = isFraud;
-
-          // Hide vendor tickets when marked fraud
-          if (isFraud) {
-            await ticketCollection.updateMany(
-              {
-                vendorEmail: email,
-              },
-              {
-                $set: {
-                  isHidden: true,
-                },
-              },
-            );
-          }
-
-          // Show tickets again if fraud removed
-          if (!isFraud) {
-            await ticketCollection.updateMany(
-              {
-                vendorEmail: email,
-              },
-              {
-                $set: {
-                  isHidden: false,
-                },
-              },
-            );
-          }
-        }
-
-        const result = await userCollection.updateOne(
-          { email },
-          {
-            $set: updateDoc,
-          },
-        );
-        res.send(result);
-      } catch (error) {
-        console.error(error);
-
-        res.status(500).send({
-          message: "Failed to update user",
-        });
-      }
-    });
+      },
+    );
 
     // Tickets Related API
     app.get("/api/tickets", verifyToken, async (req, res) => {
@@ -196,20 +239,99 @@ async function run() {
       res.send(result);
     });
 
-    // get admin approved tickets
+    // Get approved tickets with search, filter, sort & pagination
     app.get("/api/tickets/approved", async (req, res) => {
       try {
-        const result = await ticketCollection
+        const {
+          from = "",
+          to = "",
+          transport = "",
+          sort = "",
+          page = 1,
+          limit = 9,
+        } = req.query;
+
+        const query = {
+          status: "approved",
+          isHidden: { $ne: true },
+        };
+
+        // Regex search
+        if (from) {
+          query.from = {
+            $regex: from,
+            $options: "i",
+          };
+        }
+
+        if (to) {
+          query.to = {
+            $regex: to,
+            $options: "i",
+          };
+        }
+
+        // Transport filter
+        if (transport) {
+          query.transportType = transport;
+        }
+
+        // Sorting
+        let sortOption = {
+          updatedAt: -1,
+        };
+
+        if (sort === "low-high") {
+          sortOption = {
+            price: 1,
+          };
+        }
+
+        if (sort === "high-low") {
+          sortOption = {
+            price: -1,
+          };
+        }
+
+        const pageNumber = Number(page);
+        const limitNumber = Number(limit);
+
+        const skip = (pageNumber - 1) * limitNumber;
+
+        const totalTickets = await ticketCollection.countDocuments(query);
+
+        const tickets = await ticketCollection
+          .find(query)
+          .sort(sortOption)
+          .skip(skip)
+          .limit(limitNumber)
+          .toArray();
+
+        res.send({
+          tickets,
+          totalTickets,
+          currentPage: pageNumber,
+          totalPages: Math.ceil(totalTickets / limitNumber),
+          limit: limitNumber,
+        });
+      } catch (error) {
+        res.status(500).send({
+          message: error.message,
+        });
+      }
+    });
+
+    app.get("/api/tickets/approved/all", async (req, res) => {
+      try {
+        const tickets = await ticketCollection
           .find({
             status: "approved",
             isHidden: { $ne: true },
           })
-          .sort({
-            updatedAt: -1,
-          })
+          .sort({ updatedAt: -1 })
           .toArray();
 
-        res.send(result);
+        res.send(tickets);
       } catch (error) {
         res.status(500).send({
           message: error.message,
@@ -229,107 +351,125 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/api/tickets/:id", verifyToken, async (req, res) => {
-      const { id } = req.params;
-      const { status } = req.body;
+    app.patch(
+      "/api/tickets/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { status } = req.body;
 
-      const result = await ticketCollection.updateOne(
-        {
-          _id: new ObjectId(id),
-        },
-        {
-          $set: {
-            status,
-            updatedAt: new Date(),
+        const result = await ticketCollection.updateOne(
+          {
+            _id: new ObjectId(id),
           },
-        },
-      );
+          {
+            $set: {
+              status,
+              updatedAt: new Date(),
+            },
+          },
+        );
 
-      res.send(result);
-    });
+        res.send(result);
+      },
+    );
 
     // update advertised status
-    app.patch("/api/tickets/advertise/:id", verifyToken, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { isAdvertised } = req.body;
+    app.patch(
+      "/api/tickets/advertise/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isAdvertised } = req.body;
 
-        if (isAdvertised) {
-          const count = await ticketCollection.countDocuments({
-            isAdvertised: true,
-          });
-
-          if (count >= 6) {
-            return res.status(400).send({
-              message: "Only 6 advertisements are allowed.",
+          if (isAdvertised) {
+            const count = await ticketCollection.countDocuments({
+              isAdvertised: true,
             });
+
+            if (count >= 6) {
+              return res.status(400).send({
+                message: "Only 6 advertisements are allowed.",
+              });
+            }
           }
-        }
 
-        const result = await ticketCollection.updateOne(
-          {
-            _id: new ObjectId(id),
-          },
-          {
-            $set: {
-              isAdvertised,
-              updatedAt: new Date(),
+          const result = await ticketCollection.updateOne(
+            {
+              _id: new ObjectId(id),
             },
-          },
-        );
+            {
+              $set: {
+                isAdvertised,
+                updatedAt: new Date(),
+              },
+            },
+          );
 
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          message: error.message,
-        });
-      }
-    });
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({
+            message: error.message,
+          });
+        }
+      },
+    );
 
     // Update Ticket with vendor
-    app.patch("/api/tickets/update/:id", verifyToken, verifyVendor, async (req, res) => {
-      try {
-        const { id } = req.params;
+    app.patch(
+      "/api/tickets/update/:id",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
 
-        const updatedTicket = req.body;
+          const updatedTicket = req.body;
 
-        const result = await ticketCollection.updateOne(
-          {
-            _id: new ObjectId(id),
-          },
-          {
-            $set: {
-              ...updatedTicket,
-              updatedAt: new Date(),
+          const result = await ticketCollection.updateOne(
+            {
+              _id: new ObjectId(id),
             },
-          },
-        );
+            {
+              $set: {
+                ...updatedTicket,
+                updatedAt: new Date(),
+              },
+            },
+          );
 
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          message: error.message,
-        });
-      }
-    });
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({
+            message: error.message,
+          });
+        }
+      },
+    );
 
-    app.delete("/api/tickets/:id", verifyToken, verifyVendor, async (req, res) => {
-      try {
-        const { id } = req.params;
+    app.delete(
+      "/api/tickets/:id",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
 
-        const result = await ticketCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
+          const result = await ticketCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
 
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          message: error.message,
-        });
-      }
-    });
-
-
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({
+            message: error.message,
+          });
+        }
+      },
+    );
 
     // Tickets Booking related API
     app.get("/api/bookings", verifyToken, async (req, res) => {
@@ -349,7 +489,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/bookings", verifyToken, async (req, res) => {
+    app.post("/api/bookings", verifyToken, verifyUser, async (req, res) => {
       const booking = req.body;
       const newBooking = {
         ...booking,
@@ -373,7 +513,7 @@ async function run() {
     });
 
     // payment related api
-    app.get("/api/payments", verifyToken, async (req, res) => {
+    app.get("/api/payments", verifyToken, verifyUser, async (req, res) => {
       const query = {};
       if (req.query.customerEmail) {
         query.customerEmail = req.query.customerEmail;
@@ -382,7 +522,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/api/payments", verifyToken, async (req, res) => {
+    app.post("/api/payments", verifyToken, verifyUser, async (req, res) => {
       try {
         const payment = req.body;
 
@@ -453,114 +593,119 @@ async function run() {
     });
 
     // revenue report
-    app.get("/api/vendor-analytics/:email", verifyToken, async (req, res) => {
-      try {
-        const { email } = req.params;
+    app.get(
+      "/api/vendor-analytics/:email",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
 
-        // 1. Fetch all tickets owned by this vendor
-        const tickets = await ticketCollection
-          .find({ vendorEmail: email })
-          .toArray();
+          // 1. Fetch all tickets owned by this vendor
+          const tickets = await ticketCollection
+            .find({ vendorEmail: email })
+            .toArray();
 
-        // 2. Fetch all bookings for this vendor's tickets that have been paid
-        // We match by checking if the booking has a status of "paid"
-        // Note: If your schema uses passengerEmail/vendorEmail mappings explicitly, adjust filter criteria
-        const bookings = await bookingCollection
-          .find({
-            status: "paid",
-          })
-          .toArray();
+          // 2. Fetch all bookings for this vendor's tickets that have been paid
+          // We match by checking if the booking has a status of "paid"
+          // Note: If your schema uses passengerEmail/vendorEmail mappings explicitly, adjust filter criteria
+          const bookings = await bookingCollection
+            .find({
+              status: "paid",
+            })
+            .toArray();
 
-        // Since bookings don't explicitly hold a vendorEmail field in the sample,
-        // we filter bookings matching this vendor's ticket IDs to be mathematically accurate.
-        const vendorTicketIds = tickets.map((t) => t._id.toString());
-        const vendorBookings = bookings.filter((b) =>
-          vendorTicketIds.includes(b.ticketId),
-        );
+          // Since bookings don't explicitly hold a vendorEmail field in the sample,
+          // we filter bookings matching this vendor's ticket IDs to be mathematically accurate.
+          const vendorTicketIds = tickets.map((t) => t._id.toString());
+          const vendorBookings = bookings.filter((b) =>
+            vendorTicketIds.includes(b.ticketId),
+          );
 
-        // Calculate core totals
-        const totalTicketsAdded = tickets.reduce(
-          (acc, t) => acc + (Number(t.quantity) || 0),
-          0,
-        );
-        const totalTicketsSold = vendorBookings.reduce(
-          (acc, b) => acc + (Number(b.bookingQuantity) || 0),
-          0,
-        );
-        const totalRevenue = vendorBookings.reduce(
-          (acc, b) => acc + (Number(b.totalPrice) || 0),
-          0,
-        );
+          // Calculate core totals
+          const totalTicketsAdded = tickets.reduce(
+            (acc, t) => acc + (Number(t.quantity) || 0),
+            0,
+          );
+          const totalTicketsSold = vendorBookings.reduce(
+            (acc, b) => acc + (Number(b.bookingQuantity) || 0),
+            0,
+          );
+          const totalRevenue = vendorBookings.reduce(
+            (acc, b) => acc + (Number(b.totalPrice) || 0),
+            0,
+          );
 
-        /* ---------------- DYNAMIC ROLLING 6-MONTH REVENUE MAP ---------------- */
-        const monthNames = [
-          "Jan",
-          "Feb",
-          "Mar",
-          "Apr",
-          "May",
-          "Jun",
-          "Jul",
-          "Aug",
-          "Sep",
-          "Oct",
-          "Nov",
-          "Dec",
-        ];
-        const revenueMap = {};
+          /* ---------------- DYNAMIC ROLLING 6-MONTH REVENUE MAP ---------------- */
+          const monthNames = [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+          ];
+          const revenueMap = {};
 
-        // Pre-populate structural keys for the last 6 months in chronological order
-        for (let i = 5; i >= 0; i--) {
-          const d = new Date();
-          d.setMonth(d.getMonth() - i);
-          const mName = monthNames[d.getMonth()];
-          revenueMap[mName] = 0;
-        }
-
-        // Allocate booking price groups into matching month structures
-        vendorBookings.forEach((booking) => {
-          if (booking.paidAt || booking.createdAt) {
-            const targetDate = booking.paidAt
-              ? new Date(booking.paidAt)
-              : new Date(booking.createdAt);
-            const mName = monthNames[targetDate.getMonth()];
-            if (revenueMap[mName] !== undefined) {
-              revenueMap[mName] += Number(booking.totalPrice) || 0;
-            }
+          // Pre-populate structural keys for the last 6 months in chronological order
+          for (let i = 5; i >= 0; i--) {
+            const d = new Date();
+            d.setMonth(d.getMonth() - i);
+            const mName = monthNames[d.getMonth()];
+            revenueMap[mName] = 0;
           }
-        });
 
-        const revenueData = Object.entries(revenueMap).map(
-          ([month, revenue]) => ({
-            month,
-            revenue,
-          }),
-        );
+          // Allocate booking price groups into matching month structures
+          vendorBookings.forEach((booking) => {
+            if (booking.paidAt || booking.createdAt) {
+              const targetDate = booking.paidAt
+                ? new Date(booking.paidAt)
+                : new Date(booking.createdAt);
+              const mName = monthNames[targetDate.getMonth()];
+              if (revenueMap[mName] !== undefined) {
+                revenueMap[mName] += Number(booking.totalPrice) || 0;
+              }
+            }
+          });
 
-        const ticketPerformance = [
-          { name: "Available Pool", value: totalTicketsAdded },
-          { name: "Tickets Sold", value: totalTicketsSold },
-        ];
+          const revenueData = Object.entries(revenueMap).map(
+            ([month, revenue]) => ({
+              month,
+              revenue,
+            }),
+          );
 
-        res.send({
-          success: true,
-          stats: {
-            ticketsAdded: totalTicketsAdded,
-            ticketsSold: totalTicketsSold,
-            revenue: totalRevenue,
-          },
-          revenueData,
-          ticketPerformance,
-        });
-      } catch (error) {
-        console.error("Analytics aggregation error:", error);
-        res.status(500).send({
-          success: false,
-          message:
-            "Internal server error gathering aggregate dashboard trends.",
-        });
-      }
-    });
+          const ticketPerformance = [
+            { name: "Available Pool", value: totalTicketsAdded },
+            { name: "Tickets Sold", value: totalTicketsSold },
+          ];
+
+          res.send({
+            success: true,
+            stats: {
+              ticketsAdded: totalTicketsAdded,
+              ticketsSold: totalTicketsSold,
+              revenue: totalRevenue,
+            },
+            revenueData,
+            ticketPerformance,
+          });
+        } catch (error) {
+          console.error("Analytics aggregation error:", error);
+          res.status(500).send({
+            success: false,
+            message:
+              "Internal server error gathering aggregate dashboard trends.",
+          });
+        }
+      },
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
