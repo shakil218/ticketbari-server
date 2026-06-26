@@ -240,6 +240,33 @@ async function run() {
       }
     });
 
+    // Update Ticket with vendor
+    app.patch("/api/tickets/update/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const updatedTicket = req.body;
+
+        const result = await ticketCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+          },
+          {
+            $set: {
+              ...updatedTicket,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          message: error.message,
+        });
+      }
+    });
+
     app.delete("/api/tickets/:id", async (req, res) => {
       try {
         const { id } = req.params;
